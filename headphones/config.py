@@ -31,6 +31,7 @@ class path(str):
     def __repr__(self):
         return 'headphones.config.path(%s)' % self
 
+
 _CONFIG_DEFINITIONS = {
     'ADD_ALBUM_ART': (int, 'General', 0),
     'ADVANCEDENCODER': (str, 'General', ''),
@@ -80,7 +81,6 @@ _CONFIG_DEFINITIONS = {
     'DELUGE_PASSWORD': (str, 'Deluge', ''),
     'DELUGE_LABEL': (str, 'Deluge', ''),
     'DELUGE_DONE_DIRECTORY': (str, 'Deluge', ''),
-    'DELUGE_DOWNLOAD_DIRECTORY': (str, 'Deluge', ''),
     'DELUGE_PAUSED': (int, 'Deluge', 0),
     'DESTINATION_DIR': (str, 'General', ''),
     'DETECT_BITRATE': (int, 'General', 0),
@@ -156,10 +156,9 @@ _CONFIG_DEFINITIONS = {
     'KEEP_TORRENT_FILES': (int, 'General', 0),
     'KEEP_TORRENT_FILES_DIR': (path, 'General', ''),
     'LASTFM_USERNAME': (str, 'General', ''),
-    'LASTFM_APIKEY': (str, 'General', ''),
     'LAUNCH_BROWSER': (int, 'General', 1),
     'LIBRARYSCAN': (int, 'General', 1),
-    'LIBRARYSCAN_INTERVAL': (int, 'General', 24),
+    'LIBRARYSCAN_INTERVAL': (int, 'General', 300),
     'LMS_ENABLED': (int, 'LMS', 0),
     'LMS_HOST': (str, 'LMS', ''),
     'LOG_DIR': (path, 'General', ''),
@@ -203,6 +202,9 @@ _CONFIG_DEFINITIONS = {
     'PIRATEBAY': (int, 'Piratebay', 0),
     'PIRATEBAY_PROXY_URL': (str, 'Piratebay', ''),
     'PIRATEBAY_RATIO': (str, 'Piratebay', ''),
+    'OLDPIRATEBAY': (int, 'Old Piratebay', 0),
+    'OLDPIRATEBAY_URL': (str, 'Old Piratebay', ''),
+    'OLDPIRATEBAY_RATIO': (str, 'Old Piratebay', ''),
     'PLEX_CLIENT_HOST': (str, 'Plex', ''),
     'PLEX_ENABLED': (int, 'Plex', 0),
     'PLEX_NOTIFY': (int, 'Plex', 0),
@@ -239,7 +241,6 @@ _CONFIG_DEFINITIONS = {
     'QBITTORRENT_PASSWORD': (str, 'QBitTorrent', ''),
     'QBITTORRENT_USERNAME': (str, 'QBitTorrent', ''),
     'RENAME_FILES': (int, 'General', 0),
-    'RENAME_SINGLE_DISC_IGNORE': (int, 'General', 0),
     'RENAME_UNPROCESSED': (bool_int, 'General', 1),
     'RENAME_FROZEN': (bool_int, 'General', 1),
     'REPLACE_EXISTING_FOLDERS': (int, 'General', 0),
@@ -267,11 +268,6 @@ _CONFIG_DEFINITIONS = {
     'SONGKICK_ENABLED': (int, 'Songkick', 1),
     'SONGKICK_FILTER_ENABLED': (int, 'Songkick', 0),
     'SONGKICK_LOCATION': (str, 'Songkick', ''),
-    'SOULSEEK_API_URL': (str, 'Soulseek', ''),
-    'SOULSEEK_API_KEY': (str, 'Soulseek', ''),
-    'SOULSEEK_DOWNLOAD_DIR': (str, 'Soulseek', ''),
-    'SOULSEEK_INCOMPLETE_DOWNLOAD_DIR': (str, 'Soulseek', ''),
-    'SOULSEEK': (int, 'Soulseek', 0),
     'SUBSONIC_ENABLED': (int, 'Subsonic', 0),
     'SUBSONIC_HOST': (str, 'Subsonic', ''),
     'SUBSONIC_PASSWORD': (str, 'Subsonic', ''),
@@ -305,8 +301,11 @@ _CONFIG_DEFINITIONS = {
     'UTORRENT_USERNAME': (str, 'uTorrent', ''),
     'VERIFY_SSL_CERT': (bool_int, 'Advanced', 1),
     'WAIT_UNTIL_RELEASE_DATE': (int, 'General', 0),
+    'WAFFLES': (int, 'Waffles', 0),
+    'WAFFLES_PASSKEY': (str, 'Waffles', ''),
+    'WAFFLES_RATIO': (str, 'Waffles', ''),
+    'WAFFLES_UID': (str, 'Waffles', ''),
     'REDACTED': (int, 'Redacted', 0),
-    'REDACTED_APIKEY': (str, 'Redacted', ''),
     'REDACTED_USERNAME': (str, 'Redacted', ''),
     'REDACTED_PASSWORD': (str, 'Redacted', ''),
     'REDACTED_RATIO': (str, 'Redacted', ''),
@@ -317,9 +316,7 @@ _CONFIG_DEFINITIONS = {
     'XBMC_PASSWORD': (str, 'XBMC', ''),
     'XBMC_UPDATE': (int, 'XBMC', 0),
     'XBMC_USERNAME': (str, 'XBMC', ''),
-    'XLDPROFILE': (str, 'General', ''),
-    'BANDCAMP': (int, 'General', 0),
-    'BANDCAMP_DIR': (path, 'General', '')
+    'XLDPROFILE': (str, 'General', '')
 }
 
 
@@ -331,7 +328,7 @@ class Config(object):
     def __init__(self, config_file):
         """ Initialize the config with values from a file """
         self._config_file = config_file
-        self._config = ConfigParser(interpolation=None)
+        self._config = ConfigParser()
         self._config.read(self._config_file)
         for key in list(_CONFIG_DEFINITIONS.keys()):
             self.check_setting(key)
@@ -367,12 +364,12 @@ class Config(object):
 
         try:
             my_val = definition_type(self._config[section][ini_key])
-            # ConfigParser interprets quotes in the config
+            # ConfigParser interprets empty strings in the config
             # literally, so we need to sanitize it. It's not really
-            # a config upgrade, since a user can at any time put 
-            # some_key = 'some_val'
-            if type(my_val) in [str, path]:
-                my_val = my_val.strip('"').strip("'")
+            # a config upgrade, since a user can at any time put
+            # some_key = ''
+            if my_val == '""' or my_val == "''":
+                my_val = ''
         except Exception:
             my_val = default
             self._config[section][ini_key] = str(my_val)
@@ -380,7 +377,7 @@ class Config(object):
 
     def write(self):
         """ Make a copy of the stored config and write it to the configured file """
-        new_config = ConfigParser(interpolation=None)
+        new_config = ConfigParser()
 
         # first copy over everything from the old config, even if it is not
         # correctly defined to keep from losing data
@@ -411,7 +408,7 @@ class Config(object):
         """ Return the extra newznab tuples """
         extra_newznabs = list(
             zip(*[itertools.islice(self.EXTRA_NEWZNABS, i, None, 3)
-                             for i in range(3)])
+                  for i in range(3)])
         )
         return extra_newznabs
 
@@ -430,7 +427,7 @@ class Config(object):
         """ Return the extra torznab tuples """
         extra_torznabs = list(
             zip(*[itertools.islice(self.EXTRA_TORZNABS, i, None, 4)
-                             for i in range(4)])
+                  for i in range(4)])
         )
         return extra_torznabs
 
@@ -507,7 +504,7 @@ class Config(object):
             if self.EXTRA_TORZNABS:
                 extra_torznabs = list(
                     zip(*[itertools.islice(self.EXTRA_TORZNABS, i, None, 3)
-                                     for i in range(3)])
+                          for i in range(3)])
                 )
                 new_torznabs = []
                 for torznab in extra_torznabs:

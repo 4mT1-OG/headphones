@@ -15,46 +15,38 @@
 
 # NZBGet support added by CurlyMo <curlymoo1@gmail.com> as a part of XBian - XBMC on the Raspberry Pi
 
-import json
-import os
-import random
-import re
-import secrets
-import sys
-import threading
-import time
-from collections import OrderedDict
-from dataclasses import asdict
-from html import escape as html_escape
 from operator import itemgetter
-from urllib import parse
+import threading
+import secrets
+import random
+import urllib.request
+import urllib.parse
+import urllib.error
+import json
+import time
+import sys
+from html import escape as html_escape
+import urllib.request
+import urllib.error
+import urllib.parse
 
-import cherrypy
-from mako import exceptions
+import os
+import re
+from headphones import logger, searcher, db, importer, mb, lastfm, librarysync, helpers, notifiers, crier
+from headphones.helpers import checked, radio, today, clean_name
 from mako.lookup import TemplateLookup
-
+from mako import exceptions
 import headphones
-from headphones import (
-    crier,
-    db,
-    importer,
-    lastfm,
-    librarysync,
-    logger,
-    mb,
-    notifiers,
-    searcher,
-)
-from headphones.helpers import (
-    checked,
-    clean_name,
-    have_pct_have_total,
-    pattern_substitute,
-    radio,
-    replace_illegal_chars,
-    today,
-)
-from headphones.types import Result
+import cherrypy
+
+try:
+    # pylint:disable=E0611
+    # ignore this error because we are catching the ImportError
+    from collections import OrderedDict
+    # pylint:enable=E0611
+except ImportError:
+    # Python 2.6.x fallback, from libs
+    from ordereddict import OrderedDict
 
 
 def serve_template(templatename, **kwargs):
@@ -338,9 +330,9 @@ class WebInterface(object):
                   '$first': firstchar.lower(),
                   }
 
-        folder = pattern_substitute(folder_format.strip(), values, normalize=True)
+        folder = helpers.pattern_substitute(folder_format.strip(), values, normalize=True)
 
-        folder = replace_illegal_chars(folder, type="folder")
+        folder = helpers.replace_illegal_chars(folder, type="folder")
         folder = folder.replace('./', '_/').replace('/.', '/_')
 
         if folder.endswith('.'):
@@ -427,9 +419,9 @@ class WebInterface(object):
             myDB = db.DBConnection()
             for artist in args:
                 myDB.action('DELETE FROM newartists WHERE ArtistName=?',
-                            [artist])
+                            [artist.decode(headphones.SYS_ENCODING, 'replace')])
                 myDB.action('UPDATE have SET Matched="Ignored" WHERE ArtistName=?',
-                            [artist])
+                            [artist.decode(headphones.SYS_ENCODING, 'replace')])
                 logger.info("Artist %s removed from new artist list and set to ignored" % artist)
         raise cherrypy.HTTPRedirect("home")
 
@@ -452,27 +444,40 @@ class WebInterface(object):
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def choose_specific_download(self, AlbumID):
-        results = searcher.searchforalbum(AlbumID, choose_specific_download=True) or []
-        return list(map(asdict, results))
+        results = searcher.searchforalbum(AlbumID, choose_specific_download=True)
+
+        data = []
+
+        for result in results:
+            result_dict = {
+                'title': result[0],
+                'size': result[1],
+                'url': result[2],
+                'provider': result[3],
+                'kind': result[4],
+                'matches': result[5]
+            }
+            data.append(result_dict)
+        return data
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def download_specific_release(self, AlbumID, title, size, url, provider, kind, **kwargs):
         # Handle situations where the torrent url contains arguments that are parsed
         if kwargs:
-            url = parse.quote(url, safe=":?/=&") + '&' + parse.urlencode(kwargs)
+            url = urllib.parse.quote(url, safe=":?/=&") + '&' + urllib.parse.urlencode(kwargs)
         try:
-            result = [Result(title, int(size), url, provider, kind, True)]
+            result = [(title, int(size), url, provider, kind)]
         except ValueError:
-            result = [Result(title, float(size), url, provider, kind, True)]
+            result = [(title, float(size), url, provider, kind)]
 
         logger.info("Making sure we can download the chosen result")
-        data, result = searcher.preprocess(result)
+        (data, bestqual) = searcher.preprocess(result)
 
-        if data and result:
+        if data and bestqual:
             myDB = db.DBConnection()
             album = myDB.action('SELECT * from albums WHERE AlbumID=?', [AlbumID]).fetchone()
-            searcher.send_to_downloader(data, result, album)
+            searcher.send_to_downloader(data, bestqual, album)
             return {'result': 'success'}
         else:
             return {'result': 'failure'}
@@ -585,7 +590,7 @@ class WebInterface(object):
         for albums in have_albums:
             # Have to skip over manually matched tracks
             if albums['ArtistName'] and albums['AlbumTitle'] and albums['TrackTitle']:
-                original_clean = clean_name(
+                original_clean = helpers.clean_name(
                     albums['ArtistName'] + " " + albums['AlbumTitle'] + " " + albums['TrackTitle'])
                 # else:
                 #     original_clean = None
@@ -632,8 +637,8 @@ class WebInterface(object):
                 (artist, album))
 
         elif action == "matchArtist":
-            existing_artist_clean = clean_name(existing_artist).lower()
-            new_artist_clean = clean_name(new_artist).lower()
+            existing_artist_clean = helpers.clean_name(existing_artist).lower()
+            new_artist_clean = helpers.clean_name(new_artist).lower()
             if new_artist_clean != existing_artist_clean:
                 have_tracks = myDB.action(
                     'SELECT Matched, CleanName, Location, BitRate, Format FROM have WHERE ArtistName=?',
@@ -677,10 +682,10 @@ class WebInterface(object):
                     "Artist %s already named appropriately; nothing to modify" % existing_artist)
 
         elif action == "matchAlbum":
-            existing_artist_clean = clean_name(existing_artist).lower()
-            new_artist_clean = clean_name(new_artist).lower()
-            existing_album_clean = clean_name(existing_album).lower()
-            new_album_clean = clean_name(new_album).lower()
+            existing_artist_clean = helpers.clean_name(existing_artist).lower()
+            new_artist_clean = helpers.clean_name(new_artist).lower()
+            existing_album_clean = helpers.clean_name(existing_album).lower()
+            new_album_clean = helpers.clean_name(new_album).lower()
             existing_clean_string = existing_artist_clean + " " + existing_album_clean
             new_clean_string = new_artist_clean + " " + new_album_clean
             if existing_clean_string != new_clean_string:
@@ -736,7 +741,7 @@ class WebInterface(object):
             'SELECT ArtistName, AlbumTitle, TrackTitle, CleanName, Matched from have')
         for albums in manualalbums:
             if albums['ArtistName'] and albums['AlbumTitle'] and albums['TrackTitle']:
-                original_clean = clean_name(
+                original_clean = helpers.clean_name(
                     albums['ArtistName'] + " " + albums['AlbumTitle'] + " " + albums['TrackTitle'])
                 if albums['Matched'] == "Ignored" or albums['Matched'] == "Manual" or albums[
                         'CleanName'] != original_clean:
@@ -777,14 +782,14 @@ class WebInterface(object):
                 [artist])
             update_count = 0
             for tracks in update_clean:
-                original_clean = clean_name(
+                original_clean = helpers.clean_name(
                     tracks['ArtistName'] + " " + tracks['AlbumTitle'] + " " + tracks[
                         'TrackTitle']).lower()
                 album = tracks['AlbumTitle']
                 track_title = tracks['TrackTitle']
                 if tracks['CleanName'] != original_clean:
                     artist_id_check = myDB.action('SELECT ArtistID FROM tracks WHERE CleanName = ?',
-                                                 [tracks['CleanName']]).fetchone()
+                                                  [tracks['CleanName']]).fetchone()
                     if artist_id_check:
                         artist_id = artist_id_check[0]
                     myDB.action(
@@ -809,7 +814,7 @@ class WebInterface(object):
                 (artist, album))
             update_count = 0
             for tracks in update_clean:
-                original_clean = clean_name(
+                original_clean = helpers.clean_name(
                     tracks['ArtistName'] + " " + tracks['AlbumTitle'] + " " + tracks[
                         'TrackTitle']).lower()
                 track_title = tracks['TrackTitle']
@@ -1017,7 +1022,9 @@ class WebInterface(object):
             totalcount = myDB.select('SELECT COUNT(*) from artists')[0][0]
 
         if sortbyhavepercent:
-            filtered.sort(key=have_pct_have_total, reverse=sSortDir_0 == "asc")
+            filtered.sort(key=lambda x: (
+                float(x['HaveTracks']) / x['TotalTracks'] if x['TotalTracks'] > 0 else 0.0,
+                x['HaveTracks'] if x['HaveTracks'] else 0.0), reverse=sSortDir_0 == "asc")
 
         # can't figure out how to change the datatables default sorting order when its using an ajax datasource so ill
         # just reverse it here and the first click on the "Latest Album" header will sort by descending release date
@@ -1071,7 +1078,7 @@ class WebInterface(object):
             data[counter] = album['AlbumTitle']
             counter += 1
 
-        return data 
+        return data
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
@@ -1183,7 +1190,6 @@ class WebInterface(object):
             "deluge_password": headphones.CONFIG.DELUGE_PASSWORD,
             "deluge_label": headphones.CONFIG.DELUGE_LABEL,
             "deluge_done_directory": headphones.CONFIG.DELUGE_DONE_DIRECTORY,
-            "deluge_download_directory": headphones.CONFIG.DELUGE_DOWNLOAD_DIRECTORY,
             "deluge_paused": checked(headphones.CONFIG.DELUGE_PAUSED),
             "utorrent_host": headphones.CONFIG.UTORRENT_HOST,
             "utorrent_username": headphones.CONFIG.UTORRENT_USERNAME,
@@ -1198,8 +1204,6 @@ class WebInterface(object):
             "torrent_downloader_deluge": radio(headphones.CONFIG.TORRENT_DOWNLOADER, 3),
             "torrent_downloader_qbittorrent": radio(headphones.CONFIG.TORRENT_DOWNLOADER, 4),
             "download_dir": headphones.CONFIG.DOWNLOAD_DIR,
-            "soulseek_download_dir": headphones.CONFIG.SOULSEEK_DOWNLOAD_DIR,
-            "soulseek_incomplete_download_dir": headphones.CONFIG.SOULSEEK_INCOMPLETE_DOWNLOAD_DIR,
             "use_blackhole": checked(headphones.CONFIG.BLACKHOLE),
             "blackhole_dir": headphones.CONFIG.BLACKHOLE_DIR,
             "usenet_retention": headphones.CONFIG.USENET_RETENTION,
@@ -1231,6 +1235,13 @@ class WebInterface(object):
             "use_piratebay": checked(headphones.CONFIG.PIRATEBAY),
             "piratebay_proxy_url": headphones.CONFIG.PIRATEBAY_PROXY_URL,
             "piratebay_ratio": headphones.CONFIG.PIRATEBAY_RATIO,
+            "use_oldpiratebay": checked(headphones.CONFIG.OLDPIRATEBAY),
+            "oldpiratebay_url": headphones.CONFIG.OLDPIRATEBAY_URL,
+            "oldpiratebay_ratio": headphones.CONFIG.OLDPIRATEBAY_RATIO,
+            "use_waffles": checked(headphones.CONFIG.WAFFLES),
+            "waffles_uid": headphones.CONFIG.WAFFLES_UID,
+            "waffles_passkey": headphones.CONFIG.WAFFLES_PASSKEY,
+            "waffles_ratio": headphones.CONFIG.WAFFLES_RATIO,
             "use_rutracker": checked(headphones.CONFIG.RUTRACKER),
             "rutracker_user": headphones.CONFIG.RUTRACKER_USER,
             "rutracker_password": headphones.CONFIG.RUTRACKER_PASSWORD,
@@ -1242,7 +1253,6 @@ class WebInterface(object):
             "orpheus_ratio": headphones.CONFIG.ORPHEUS_RATIO,
             "orpheus_url": headphones.CONFIG.ORPHEUS_URL,
             "use_redacted": checked(headphones.CONFIG.REDACTED),
-            "redacted_apikey": headphones.CONFIG.REDACTED_APIKEY,
             "redacted_username": headphones.CONFIG.REDACTED_USERNAME,
             "redacted_password": headphones.CONFIG.REDACTED_PASSWORD,
             "redacted_ratio": headphones.CONFIG.REDACTED_RATIO,
@@ -1265,7 +1275,6 @@ class WebInterface(object):
             "cue_split_shntool_path": headphones.CONFIG.CUE_SPLIT_SHNTOOL_PATH,
             "move_files": checked(headphones.CONFIG.MOVE_FILES),
             "rename_files": checked(headphones.CONFIG.RENAME_FILES),
-            "rename_single_disc_ignore": checked(headphones.CONFIG.RENAME_SINGLE_DISC_IGNORE),
             "correct_metadata": checked(headphones.CONFIG.CORRECT_METADATA),
             "cleanup_files": checked(headphones.CONFIG.CLEANUP_FILES),
             "keep_nfo": checked(headphones.CONFIG.KEEP_NFO),
@@ -1293,7 +1302,6 @@ class WebInterface(object):
             "prefer_torrents_0": radio(headphones.CONFIG.PREFER_TORRENTS, 0),
             "prefer_torrents_1": radio(headphones.CONFIG.PREFER_TORRENTS, 1),
             "prefer_torrents_2": radio(headphones.CONFIG.PREFER_TORRENTS, 2),
-            "prefer_torrents_3": radio(headphones.CONFIG.PREFER_TORRENTS, 3),
             "magnet_links_0": radio(headphones.CONFIG.MAGNET_LINKS, 0),
             "magnet_links_1": radio(headphones.CONFIG.MAGNET_LINKS, 1),
             "magnet_links_2": radio(headphones.CONFIG.MAGNET_LINKS, 2),
@@ -1383,7 +1391,6 @@ class WebInterface(object):
             "custompass": headphones.CONFIG.CUSTOMPASS,
             "hpuser": headphones.CONFIG.HPUSER,
             "hppass": headphones.CONFIG.HPPASS,
-            "lastfm_apikey": headphones.CONFIG.LASTFM_APIKEY,
             "songkick_enabled": checked(headphones.CONFIG.SONGKICK_ENABLED),
             "songkick_apikey": headphones.CONFIG.SONGKICK_APIKEY,
             "songkick_location": headphones.CONFIG.SONGKICK_LOCATION,
@@ -1411,12 +1418,7 @@ class WebInterface(object):
             "join_enabled": checked(headphones.CONFIG.JOIN_ENABLED),
             "join_onsnatch": checked(headphones.CONFIG.JOIN_ONSNATCH),
             "join_apikey": headphones.CONFIG.JOIN_APIKEY,
-            "join_deviceid": headphones.CONFIG.JOIN_DEVICEID,
-            "use_bandcamp": checked(headphones.CONFIG.BANDCAMP),
-            "bandcamp_dir": headphones.CONFIG.BANDCAMP_DIR,
-            'soulseek_api_url': headphones.CONFIG.SOULSEEK_API_URL,
-            'soulseek_api_key': headphones.CONFIG.SOULSEEK_API_KEY,
-            'use_soulseek': checked(headphones.CONFIG.SOULSEEK)
+            "join_deviceid": headphones.CONFIG.JOIN_DEVICEID
         }
 
         for k, v in config.items():
@@ -1461,11 +1463,12 @@ class WebInterface(object):
         checked_configs = [
             "launch_browser", "enable_https", "api_enabled", "use_blackhole", "headphones_indexer",
             "use_newznab", "newznab_enabled", "use_torznab", "torznab_enabled",
-            "use_nzbsorg", "use_omgwtfnzbs", "use_piratebay", "use_rutracker",
+            "use_nzbsorg", "use_omgwtfnzbs", "use_piratebay", "use_oldpiratebay",
+            "use_waffles", "use_rutracker",
             "use_orpheus", "use_redacted", "redacted_use_fltoken", "preferred_bitrate_allow_lossless",
             "detect_bitrate", "ignore_clean_releases", "freeze_db", "cue_split", "move_files",
-            "rename_files", "rename_single_disc_ignore", "correct_metadata", "cleanup_files",
-            "keep_nfo", "add_album_art", "embed_album_art", "embed_lyrics",
+            "rename_files", "correct_metadata", "cleanup_files", "keep_nfo", "add_album_art",
+            "embed_album_art", "embed_lyrics",
             "replace_existing_folders", "keep_original_folder", "file_underscores",
             "include_extras", "official_releases_only",
             "wait_until_release_date", "autowant_upcoming", "autowant_all",
@@ -1484,7 +1487,7 @@ class WebInterface(object):
             "songkick_enabled", "songkick_filter_enabled",
             "mpc_enabled", "email_enabled", "email_ssl", "email_tls", "email_onsnatch",
             "customauth", "idtag", "deluge_paused",
-            "join_enabled", "join_onsnatch", "use_bandcamp", "use_soulseek"
+            "join_enabled", "join_onsnatch"
         ]
         for checked_config in checked_configs:
             if checked_config not in kwargs:
